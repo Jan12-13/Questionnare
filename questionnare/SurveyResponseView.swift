@@ -29,9 +29,6 @@ struct SurveyResponseView: View {
                                 Text(survey.details)
                                     .foregroundStyle(.secondary)
                             }
-                            Label("回答はこの端末内にのみ保存されます", systemImage: "lock.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 6)
                     }

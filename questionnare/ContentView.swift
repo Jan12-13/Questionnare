@@ -2,11 +2,15 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: SurveyStore
+    @AppStorage(AppSettings.administratorModeKey)
+    private var isAdministratorMode = AppSettings.defaultAdministratorMode
     @State private var showingTemplates = false
     @State private var showingScanner = false
+    @State private var showingSettings = false
     @State private var editingSurveyID: UUID?
     @State private var importedSurveyID: UUID?
     @State private var importError: String?
+    @State private var surveyPendingDeletion: Survey?
 
     var body: some View {
         NavigationStack {
@@ -19,6 +23,13 @@ struct ContentView: View {
             }
             .navigationTitle("アンケート")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Label("設定", systemImage: "gearshape")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingScanner = true
@@ -40,6 +51,9 @@ struct ContentView: View {
                     showingTemplates = false
                     editingSurveyID = survey.id
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
             }
             .sheet(item: $editingSurveyID) { id in
                 if let survey = store.survey(withID: id) {
@@ -79,7 +93,36 @@ struct ContentView: View {
             } message: {
                 Text(importError ?? "対応していないQRコードです。")
             }
+            .alert("このアンケートを削除しますか？", isPresented: surveyDeleteIsPresented) {
+                Button("キャンセル", role: .cancel) {
+                    surveyPendingDeletion = nil
+                }
+                Button("削除", role: .destructive) {
+                    if isAdministratorMode, let surveyPendingDeletion {
+                        store.delete(surveyPendingDeletion)
+                    }
+                    surveyPendingDeletion = nil
+                }
+            } message: {
+                if let surveyPendingDeletion {
+                    Text("「\(surveyPendingDeletion.title)」と\(surveyPendingDeletion.responses.count)件の回答を削除します。この操作は取り消せません。")
+                }
+            }
+            .onChange(of: isAdministratorMode) {
+                if !isAdministratorMode {
+                    surveyPendingDeletion = nil
+                }
+            }
         }
+    }
+
+    private var surveyDeleteIsPresented: Binding<Bool> {
+        Binding(
+            get: { surveyPendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented { surveyPendingDeletion = nil }
+            }
+        )
     }
 
     private var emptyState: some View {
@@ -97,27 +140,39 @@ struct ContentView: View {
 
     private var surveyList: some View {
         List {
-            Section {
-                Label("すべての内容と回答は、この端末内にのみ保存されます", systemImage: "lock.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            if !isAdministratorMode {
+                Section {
+                    Label("管理者状態OFF：削除操作は無効です", systemImage: "lock.shield.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("作成したアンケート") {
                 ForEach(store.surveys) { survey in
+                    let isPendingDeletion = surveyPendingDeletion?.id == survey.id
                     NavigationLink {
                         SurveyDetailView(surveyID: survey.id)
                     } label: {
                         SurveyRow(survey: survey)
                     }
+                    .offset(x: isPendingDeletion ? -DeletionPendingBackground.width : 0)
+                    .animation(.easeInOut(duration: 0.2), value: isPendingDeletion)
+                    .listRowBackground(isPendingDeletion ? DeletionPendingBackground() : nil)
                     .swipeActions(edge: .leading) {
                         Button("編集", systemImage: "pencil") {
                             editingSurveyID = survey.id
                         }
                         .tint(.blue)
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if isAdministratorMode {
+                            Button("削除", systemImage: "trash", role: .destructive) {
+                                surveyPendingDeletion = survey
+                            }
+                        }
+                    }
                 }
-                .onDelete(perform: store.delete)
             }
         }
     }

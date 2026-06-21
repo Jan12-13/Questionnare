@@ -93,10 +93,6 @@ struct SurveyQRCodeView: View {
                 } else {
                     ProgressView("QRコードを作成中…")
                 }
-
-                Label("QRコードはアンケート内容を直接保持するため、インターネットを使用しません", systemImage: "lock.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
             .padding()
         }

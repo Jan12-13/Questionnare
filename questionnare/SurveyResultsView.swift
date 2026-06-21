@@ -2,7 +2,12 @@ import SwiftUI
 
 struct SurveyResultsView: View {
     @EnvironmentObject private var store: SurveyStore
+    @AppStorage(AppSettings.administratorModeKey)
+    private var isAdministratorMode = AppSettings.defaultAdministratorMode
     let surveyID: UUID
+    @State private var exportURL: URL?
+    @State private var exportErrorMessage: String?
+    @State private var responsePendingDeletion: SurveyResponse?
 
     var body: some View {
         Group {
@@ -24,6 +29,24 @@ struct SurveyResultsView: View {
                             .listRowBackground(Color.clear)
                         }
 
+                        Section("書き出し") {
+                            if let exportURL {
+                                ShareLink(item: exportURL) {
+                                    Label("CSVを書き出す（Excel対応）", systemImage: "tablecells")
+                                }
+                            } else {
+                                Button {
+                                    prepareExport(for: survey)
+                                } label: {
+                                    Label("CSVを準備", systemImage: "tablecells")
+                                }
+                            }
+
+                            Text("1回答を1行として出力します。Excelでもそのまま開けます。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
                         ForEach(survey.questions) { question in
                             Section(question.title.isEmpty ? "無題の質問" : question.title) {
                                 QuestionSummary(question: question, responses: survey.responses)
@@ -32,6 +55,7 @@ struct SurveyResultsView: View {
 
                         Section("個別の回答") {
                             ForEach(Array(survey.responses.enumerated()), id: \.element.id) { index, response in
+                                let isPendingDeletion = responsePendingDeletion?.id == response.id
                                 NavigationLink {
                                     ResponseDetailView(
                                         surveyID: survey.id,
@@ -46,13 +70,21 @@ struct SurveyResultsView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
-                                .swipeActions {
-                                    Button("削除", systemImage: "trash", role: .destructive) {
-                                        store.deleteResponse(response.id, from: survey.id)
+                                .offset(x: isPendingDeletion ? -DeletionPendingBackground.width : 0)
+                                .animation(.easeInOut(duration: 0.2), value: isPendingDeletion)
+                                .listRowBackground(isPendingDeletion ? DeletionPendingBackground() : nil)
+                                .swipeActions(allowsFullSwipe: false) {
+                                    if isAdministratorMode {
+                                        Button("削除", systemImage: "trash", role: .destructive) {
+                                            responsePendingDeletion = response
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
+                    .task(id: survey.updatedAt) {
+                        prepareExport(for: survey)
                     }
                 }
             } else {
@@ -61,6 +93,57 @@ struct SurveyResultsView: View {
         }
         .navigationTitle("集計結果")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("CSVを書き出せません", isPresented: exportErrorIsPresented) {
+            Button("OK") { exportErrorMessage = nil }
+        } message: {
+            Text(exportErrorMessage ?? "不明なエラーが発生しました。")
+        }
+        .alert("この回答を削除しますか？", isPresented: responseDeleteIsPresented) {
+            Button("キャンセル", role: .cancel) {
+                responsePendingDeletion = nil
+            }
+            Button("削除", role: .destructive) {
+                if isAdministratorMode, let responsePendingDeletion {
+                    store.deleteResponse(responsePendingDeletion.id, from: surveyID)
+                }
+                responsePendingDeletion = nil
+            }
+        } message: {
+            Text("選択した回答を削除します。この操作は取り消せません。")
+        }
+        .onChange(of: isAdministratorMode) {
+            if !isAdministratorMode {
+                responsePendingDeletion = nil
+            }
+        }
+    }
+
+    private var exportErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { exportErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented { exportErrorMessage = nil }
+            }
+        )
+    }
+
+    private var responseDeleteIsPresented: Binding<Bool> {
+        Binding(
+            get: { responsePendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented { responsePendingDeletion = nil }
+            }
+        )
+    }
+
+    private func prepareExport(for survey: Survey) {
+        do {
+            exportURL = try SurveyCSVExporter.writeFile(for: survey)
+            exportErrorMessage = nil
+        } catch {
+            exportURL = nil
+            exportErrorMessage = error.localizedDescription
+        }
     }
 }
 
@@ -125,15 +208,16 @@ private struct QuestionSummary: View {
                     .foregroundStyle(.secondary)
             }
         case .shortText, .longText:
-            if values.isEmpty {
-                Text("回答なし").foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(values.prefix(3).enumerated()), id: \.offset) { _, value in
-                    Text(value).lineLimit(3)
-                }
-                if values.count > 3 {
-                    Text("ほか \(values.count - 3)件")
-                        .font(.caption)
+            NavigationLink {
+                TextAnswerListView(question: question, responses: responses)
+            } label: {
+                HStack {
+                    Label(
+                        "回答を見る",
+                        systemImage: question.type == .shortText ? "text.cursor" : "text.alignleft"
+                    )
+                    Spacer()
+                    Text("\(values.count)件")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -141,9 +225,78 @@ private struct QuestionSummary: View {
     }
 }
 
+private struct TextAnswerItem: Identifiable {
+    let id: UUID
+    let number: Int
+    let submittedAt: Date
+    let value: String
+}
+
+private struct TextAnswerListView: View {
+    let question: SurveyQuestion
+    let responses: [SurveyResponse]
+
+    private var items: [TextAnswerItem] {
+        responses.enumerated().compactMap { index, response in
+            let values = response.answers
+                .first(where: { $0.questionID == question.id })?
+                .values
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+            guard !values.isEmpty else { return nil }
+
+            return TextAnswerItem(
+                id: response.id,
+                number: responses.count - index,
+                submittedAt: response.submittedAt,
+                value: values.joined(separator: "\n")
+            )
+        }
+    }
+
+    var body: some View {
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView(
+                    "回答はありません",
+                    systemImage: "text.bubble",
+                    description: Text("この質問へのテキスト回答はまだありません。")
+                )
+            } else {
+                List {
+                    Section("質問") {
+                        Text(question.title.isEmpty ? "無題の質問" : question.title)
+                    }
+
+                    Section("回答（\(items.count)件）") {
+                        ForEach(items) { item in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(item.value)
+                                    .textSelection(.enabled)
+
+                                HStack {
+                                    Text("回答 \(item.number)")
+                                    Spacer()
+                                    Text(item.submittedAt.formatted(date: .abbreviated, time: .shortened))
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("回答一覧")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 private struct ResponseDetailView: View {
     @EnvironmentObject private var store: SurveyStore
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(AppSettings.administratorModeKey)
+    private var isAdministratorMode = AppSettings.defaultAdministratorMode
     let surveyID: UUID
     let responseID: UUID
     let number: Int
@@ -180,15 +333,37 @@ private struct ResponseDetailView: View {
                 Button("修正", systemImage: "pencil") {
                     showingEditor = true
                 }
-                Button("削除", systemImage: "trash", role: .destructive) {
-                    showingDeleteConfirmation = true
+                if isAdministratorMode {
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label(
+                            showingDeleteConfirmation ? "削除確認中" : "削除",
+                            systemImage: showingDeleteConfirmation ? "trash.fill" : "trash"
+                        )
+                    }
                 }
             }
         }
-        .confirmationDialog("この回答を削除しますか？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+        .alert("この回答を削除しますか？", isPresented: $showingDeleteConfirmation) {
+            Button("キャンセル", role: .cancel) {
+                showingDeleteConfirmation = false
+            }
             Button("削除", role: .destructive) {
-                store.deleteResponse(responseID, from: surveyID)
-                dismiss()
+                if isAdministratorMode {
+                    store.deleteResponse(responseID, from: surveyID)
+                }
+                showingDeleteConfirmation = false
+                if isAdministratorMode {
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("保存済みの回答を削除します。この操作は取り消せません。")
+        }
+        .onChange(of: isAdministratorMode) {
+            if !isAdministratorMode {
+                showingDeleteConfirmation = false
             }
         }
     }

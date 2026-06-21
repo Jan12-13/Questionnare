@@ -53,6 +53,7 @@ final class SurveyStore: ObservableObject {
     }
 
     func delete(at offsets: IndexSet) {
+        guard AppSettings.isAdministratorMode else { return }
         for index in offsets.sorted(by: >) {
             surveys.remove(at: index)
         }
@@ -60,6 +61,7 @@ final class SurveyStore: ObservableObject {
     }
 
     func delete(_ survey: Survey) {
+        guard AppSettings.isAdministratorMode else { return }
         surveys.removeAll { $0.id == survey.id }
         save()
     }
@@ -80,6 +82,7 @@ final class SurveyStore: ObservableObject {
     }
 
     func deleteResponse(_ responseID: UUID, from surveyID: UUID) {
+        guard AppSettings.isAdministratorMode else { return }
         guard let index = surveys.firstIndex(where: { $0.id == surveyID }) else { return }
         surveys[index].responses.removeAll { $0.id == responseID }
         save()
