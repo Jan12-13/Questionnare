@@ -140,14 +140,6 @@ struct ContentView: View {
 
     private var surveyList: some View {
         List {
-            if !isAdministratorMode {
-                Section {
-                    Label("管理者状態OFF：削除操作は無効です", systemImage: "lock.shield.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-            }
-
             Section("作成したアンケート") {
                 ForEach(store.surveys) { survey in
                     let isPendingDeletion = surveyPendingDeletion?.id == survey.id
@@ -165,7 +157,7 @@ struct ContentView: View {
                         }
                         .tint(.blue)
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         if isAdministratorMode {
                             Button("削除", systemImage: "trash", role: .destructive) {
                                 surveyPendingDeletion = survey

@@ -42,9 +42,6 @@ struct SurveyResultsView: View {
                                 }
                             }
 
-                            Text("1回答を1行として出力します。Excelでもそのまま開けます。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
 
                         ForEach(survey.questions) { question in
@@ -73,7 +70,7 @@ struct SurveyResultsView: View {
                                 .offset(x: isPendingDeletion ? -DeletionPendingBackground.width : 0)
                                 .animation(.easeInOut(duration: 0.2), value: isPendingDeletion)
                                 .listRowBackground(isPendingDeletion ? DeletionPendingBackground() : nil)
-                                .swipeActions(allowsFullSwipe: false) {
+                                .swipeActions(allowsFullSwipe: true) {
                                     if isAdministratorMode {
                                         Button("削除", systemImage: "trash", role: .destructive) {
                                             responsePendingDeletion = response
